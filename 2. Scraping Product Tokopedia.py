@@ -17,7 +17,7 @@ SPLIT_FOLDER = 'Split_Shop_Tokopedia_Sumut'
 LOG_FILE = "error_deep_scraper.log"
 
 PRODUCT_FIELDNAMES = ['Shop_ID', 'Kabkot', 'Product_ID', 'Category_ID', 'Nama_Produk', 'Harga', 'Terjual', 'Terjual_Eksak', 'Rating', 'URL_Produk', 'Scraped_At']
-SHOP_FIELDNAMES = ['Shop_ID', 'Nama_Toko', 'Domain', 'Lokasi', 'Open_Since', 'Total_Favorite', 'Produk_Terjual', 'Transaksi_Sukses', 'Is_Official']
+SHOP_FIELDNAMES = ['Shop_ID', 'Nama_Toko', 'Domain', 'Lokasi', 'Kota_Pengiriman', 'Kecamatan_Pengiriman', 'Open_Since', 'Total_Favorite', 'Produk_Terjual', 'Transaksi_Sukses', 'Is_Official']
 
 COMMON_HEADERS = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -68,7 +68,8 @@ def get_pdp_details(url, pbar, retries=3):
     for attempt in range(retries):
         try:
             scraper = cloudscraper.create_scraper()
-            pbar.set_postfix_str(f"Deep Check: {url.split('/')[-1][:10]} (Coba {attempt + 1})..")
+            clean_slug = url.split('/')[-1].split('?')[0]
+            pbar.set_postfix_str(f"Deep Check: {clean_slug[:20]}... (Try {attempt + 1})")
             if attempt > 0: time.sleep(random.uniform(1, 2))
                 
             resp = scraper.get(url, timeout=15)
@@ -104,12 +105,13 @@ def get_shop_detailed_info(domain_name):
         "operationName": "ShopInfoCore",
         "variables": {"id": 0, "domain": domain_name},
         "query": """query ShopInfoCore($id: Int!, $domain: String) {
-          shopInfoByID(input: {shopIDs: [$id], fields: ["active_product", "assets", "core", "create_info", "favorite", "location", "shopstats", "goldOS"], domain: $domain, source: "shoppage"}) {
+          shopInfoByID(input: {shopIDs: [$id], fields: ["active_product", "assets", "core", "create_info", "favorite", "location", "shipment", "shopstats", "goldOS", "other-shiploc"], domain: $domain, source: "shoppage"}) {
             result {
               shopCore { shopID name domain }
               createInfo { openSince }
               favoriteData { totalFavorite }
               location
+              shippingLoc { districtName cityName }
               shopStats { productSold totalTxSuccess }
               goldOS { isOfficial badge }
             }
@@ -127,6 +129,8 @@ def get_shop_detailed_info(domain_name):
                     'Nama_Toko': res['shopCore']['name'],
                     'Domain': res['shopCore']['domain'],
                     'Lokasi': res['location'],
+                    'Kota_Pengiriman': res['shippingLoc']['cityName'],
+                    'Kecamatan_Pengiriman': res['shippingLoc']['districtName'],
                     'Open_Since': res['createInfo']['openSince'],
                     'Total_Favorite': res['favoriteData']['totalFavorite'],
                     'Produk_Terjual': res['shopStats']['productSold'],
