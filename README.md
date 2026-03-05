@@ -22,8 +22,8 @@ Jika muncul error `Resolving timed out`, sesuaikan DNS menjadi **Manual IPv4** a
 * **Settings** > **Network & Internet** > **Wi-Fi** > **Hardware properties**
 * **DNS server assignment**: Klik **Edit** > Pilih **Manual**
 * **IPv4**: **ON**
-  1. **Preferred DNS**: `1.1.1.1`
-  2. **Alternate DNS**: `8.8.8.8`
+  1. **Preferred DNS**: `1.1.1.1` **Alternate DNS**: `8.8.8.8`
+  2. (Jika masih stuck, coba) **Preferred DNS**: `208.67.222.222` **Alternate DNS**: `208.67.220.220`
 * **Save** dan jalankan ulang skrip.
 
 ---
