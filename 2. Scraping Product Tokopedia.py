@@ -68,12 +68,15 @@ def get_pdp_details(url, pbar, retries=3):
     """Deep Scraping untuk ambil Terjual Eksak dan Category ID"""
     for attempt in range(retries):
         try:
-            scraper = cloudscraper.create_scraper()
             clean_slug = url.split('/')[-1].split('?')[0]
-            pbar.set_postfix_str(f"Deep Check: {clean_slug[:20]}... (Try {attempt + 1})")
-            if attempt > 0: time.sleep(random.uniform(1, 2))
+            # Kita ganti postfix agar tidak bertabrakan parah di terminal
+            pbar.set_postfix(item=f"{clean_slug[:20]}", status=f"try{attempt+1}")
+            
+            resp = requests.get(url, timeout=15, impersonate="chrome110")
+            
+            if resp.status_code == 404:
+                return None, None
                 
-            resp = scraper.get(url, timeout=15)
             if resp.status_code == 200:
                 html_text = resp.text
                 sold_match = re.search(r'"countSold":"(\d+)"', html_text)
@@ -93,11 +96,19 @@ def get_pdp_details(url, pbar, retries=3):
                         category_id = cat_match.group(1)
                         break
                 
-                if category_id:
-                    return sold_count, category_id
-        except Exception:
-            continue
-    return "", "" # Return blank jika gagal total agar tidak crash
+                return sold_count, category_id
+            
+            time.sleep(random.uniform(0.1, 0.3))
+            
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(2)
+                continue
+            else:
+                # Jika benar-benar mati koneksi, ini yang bikin script stop (Produk C)
+                raise ConnectionError(f"Koneksi Terputus di produk: {url}")
+
+    return "", ""
 
 def get_shop_detailed_info(domain_name, log_ctx=""):
     """Ambil metadata toko"""
@@ -177,8 +188,10 @@ def get_shop_products(shop_id, city_name, pbar, log_ctx="", max_retries=3):
                     res_json = resp.json()
                     prods = res_json[0]['data']['GetShopProduct']['data']
                     
-                    # Proses Deep Scraping dengan Thread
+                    if not prods: return all_products # Toko ga ada produk
+
                     temp_page_data = []
+                    # Mengurangi workers agar PBar tidak terlalu 'balapan'
                     with ThreadPoolExecutor(max_workers=5) as executor:
                         future_to_prod = {}
                         for p in prods:
@@ -194,11 +207,16 @@ def get_shop_products(shop_id, city_name, pbar, log_ctx="", max_retries=3):
 
                         for fut in as_completed(future_to_prod):
                             orig_p = future_to_prod[fut]
-                            eksak, cid = fut.result()
+                            eksak, cid = fut.result() 
+
+                            # MEMBERSIHKAN NAMA PRODUK DARI ENTER/NEWLINE
+                            clean_name = str(orig_p.get('name', '')).replace('\n', ' ').replace('\r', ' ').strip()
+
                             temp_page_data.append({
                                 'Shop_ID': shop_id, 'Kabkot': city_name, 
                                 'Product_ID': orig_p.get('product_id', ''),
-                                'Category_ID': cid, 'Nama_Produk': orig_p.get('name', ''), 
+                                'Category_ID': cid if cid else "",
+                                'Nama_Produk': clean_name,
                                 'Harga': orig_p.get('price', {}).get('text_idr', '0'), 
                                 'Terjual': orig_p.get('label_terjual', '0'), 
                                 'Terjual_Eksak': eksak if eksak else "", 
@@ -207,20 +225,18 @@ def get_shop_products(shop_id, city_name, pbar, log_ctx="", max_retries=3):
                             })
                     
                     all_products.extend(temp_page_data)
-                    
-                    if len(prods) < 80: 
-                        return all_products # SELESAI SEMUA HALAMAN
-                    
+                    if len(prods) < 80: return all_products
                     page += 1
                     success = True
-                    time.sleep(random.uniform(0.1, 0.3))
-                    break # Keluar dari loop retry halaman, lanjut ke next page
-                
+                    break
+            
+            except ConnectionError as e:
+                raise e # Lanjut ke stop script
             except Exception as e:
                 if attempt == max_retries - 1:
-                    log_error(f"Gagal total Halaman {page} Toko {shop_id}: {e}", context=log_ctx)
-                    return None # Gagalkan satu toko ini (All or Nothing)
-                time.sleep(random.uniform(0.1, 0.3))
+                    log_error(f"Gagal Halaman {page}: {e}", context=log_ctx)
+                    return None
+                time.sleep(2)
         
         if not success: return None
 
@@ -233,82 +249,75 @@ def start_scraping_process():
         split_shops(chunk_size=int(size) if size else 500)
         return
 
-    # Load File
     all_split_files = glob.glob(os.path.join(SPLIT_FOLDER, "SPLIT_SHOP-*.csv"))
-    if not all_split_files: 
-        print("File split tidak ditemukan.")
-        return
+    if not all_split_files: return
     
-    file_indices = [int(re.search(r'-(\d+)\.csv', f).group(1)) for f in all_split_files]
     period = input("Scraping untuk periode ke berapa? (1, 2, dst): ")
-    file_num = input(f"Mau scraping file ke berapa? ({min(file_indices)}-{max(file_indices)}): ")
+    file_num = input(f"Mau scraping file ke berapa? : ")
     ctx = f"P{period} F{file_num}"
     
     input_file = os.path.join(SPLIT_FOLDER, f"SPLIT_SHOP-{file_num}.csv")
     shop_csv_path = f"SHOP_P{period}/SHOP_P{period}-{file_num}.csv"
     prod_csv_path = f"PRODUCT_P{period}/PRODUCT_P{period}-{file_num}.csv"
     
-    print(f"\n>>> MENJALANKAN SCRAPING PERIODE: P{period} | FILE: SPLIT_SHOP-{file_num} <<<")
-    
     os.makedirs(os.path.dirname(shop_csv_path), exist_ok=True)
     os.makedirs(os.path.dirname(prod_csv_path), exist_ok=True)
 
-    # --- REFACTOR UTAMA: RESUME LOGIC BERDASARKAN DOMAIN ---
-    # Membaca Domain yang sudah sukses agar skip jadi instan tanpa HIT API
     scraped_domains = set()
     if os.path.exists(shop_csv_path):
         with open(shop_csv_path, 'r', encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f, delimiter=';')
+            # PASTIKAN DELIMITER DI SINI TAB SESUAI SAVING-NYA
+            reader = csv.DictReader(f, delimiter='\t')
             for row in reader: 
                 scraped_domains.add(str(row['Domain']).strip().lower())
 
     with open(input_file, 'r', encoding='utf-8-sig') as f:
         targets = [row for row in csv.DictReader(f, delimiter=';')]
 
-    pbar = tqdm(total=len(targets), unit="shop")
+    pbar = tqdm(total=len(targets), unit="shop", dynamic_ncols=True)
     
     for item in targets:
         domain = item['Domain'].strip()
         city = item['Kabkot']
         
-        # 1. Cek Lokal (Instan): Jika domain sudah ada di file sukses, langsung skip
         if domain.lower() in scraped_domains:
-            pbar.set_description(f"Skipping: {domain}")
             pbar.update(1)
             continue
 
-        pbar.set_description(f"Scraping: {domain}")
+        # Tampilkan Nama Toko di Kiri PBar
+        pbar.set_description(f"Shop: {domain[:20]}")
         
-        # 2. Ambil Shop Info (Hanya dilakukan untuk toko yang BELUM di-scrape)
-        shop_info = get_shop_detailed_info(domain, log_ctx=ctx)
-        if not shop_info:
-            log_error(f"Gagal ambil info toko: {domain}", context=ctx)
-            pbar.update(1)
-            continue
+        try:
+            shop_info = get_shop_detailed_info(domain, log_ctx=ctx)
+            if not shop_info:
+                pbar.update(1)
+                continue
 
-        # 3. PROSES SCRAPING (All or Nothing)
-        products = get_shop_products(shop_info['Shop_ID'], city, pbar, log_ctx=ctx)
-        
-        # 4. ATOMIC WRITE: Hanya tulis jika data produk tuntas
-        if products is not None:
-            # Simpan Produk
-            if products:
-                p_exists = os.path.isfile(prod_csv_path)
-                with open(prod_csv_path, 'a', newline='', encoding='utf-8-sig') as f:
-                    writer = csv.DictWriter(f, fieldnames=PRODUCT_FIELDNAMES, delimiter=';', extrasaction='ignore')
-                    if not p_exists: writer.writeheader()
-                    writer.writerows(products)
+            products = get_shop_products(shop_info['Shop_ID'], city, pbar, log_ctx=ctx)
             
-            # Simpan Shop (Tanda sukses toko ini)
-            s_exists = os.path.isfile(shop_csv_path)
-            with open(shop_csv_path, 'a', newline='', encoding='utf-8-sig') as f:
-                writer = csv.DictWriter(f, fieldnames=SHOP_FIELDNAMES, delimiter=';', extrasaction='ignore')
-                if not s_exists: writer.writeheader()
-                writer.writerow(shop_info)
-            
-            scraped_domains.add(domain.lower())
-        else:
-            log_error(f"Toko {domain} di-skip sementara karena gangguan koneksi.", context=ctx)
+            if products is not None:
+                # SIMPAN PAKAI TAB (\t)
+                if products:
+                    p_exists = os.path.isfile(prod_csv_path)
+                    with open(prod_csv_path, 'a', newline='', encoding='utf-8-sig') as f:
+                        writer = csv.DictWriter(f, fieldnames=PRODUCT_FIELDNAMES, delimiter='\t', extrasaction='ignore')
+                        if not p_exists: writer.writeheader()
+                        writer.writerows(products)
+                
+                s_exists = os.path.isfile(shop_csv_path)
+                with open(shop_csv_path, 'a', newline='', encoding='utf-8-sig') as f:
+                    writer = csv.DictWriter(f, fieldnames=SHOP_FIELDNAMES, delimiter='\t', extrasaction='ignore')
+                    if not s_exists: writer.writeheader()
+                    writer.writerow(shop_info)
+                
+                scraped_domains.add(domain.lower())
+                pbar.set_postfix(last_status="SUCCESS")
+            else:
+                pbar.set_postfix(last_status="FAILED")
+
+        except ConnectionError as e:
+            print(f"\n[STOP] {e}")
+            break
 
         pbar.update(1)
         time.sleep(random.uniform(0.1, 0.3))
