@@ -25,10 +25,11 @@ COMMON_HEADERS = {
     "x-source": "tokopedia-lite",
 }
 
-def log_error(message):
+def log_error(message, context=""):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    prefix = f"[{context}] " if context else ""
     with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(f"[{timestamp}] {message}\n")
+        f.write(f"[{timestamp}] {prefix}{message}\n")
 
 def split_shops(chunk_size=500):
     print("Menganalisa semua file di folder Kabkot...")
@@ -98,7 +99,7 @@ def get_pdp_details(url, pbar, retries=3):
             continue
     return "", "" # Return blank jika gagal total agar tidak crash
 
-def get_shop_detailed_info(domain_name):
+def get_shop_detailed_info(domain_name, log_ctx=""):
     """Ambil metadata toko"""
     url = "https://gql.tokopedia.com/graphql/ShopInfoCore"
     payload = [{
@@ -138,10 +139,10 @@ def get_shop_detailed_info(domain_name):
                     'Is_Official': res['goldOS']['isOfficial']
                 }
     except Exception as e:
-        log_error(f"Error Shop Info {domain_name}: {e}")
+        log_error(f"Error Shop Info {domain_name}: {e}", context=log_ctx)
     return None
 
-def get_shop_products(shop_id, city_name, pbar, max_retries=3):
+def get_shop_products(shop_id, city_name, pbar, log_ctx="", max_retries=3):
     """Ambil semua produk toko secara tuntas (All or Nothing)"""
     all_products = []
     page = 1
@@ -217,7 +218,7 @@ def get_shop_products(shop_id, city_name, pbar, max_retries=3):
                 
             except Exception as e:
                 if attempt == max_retries - 1:
-                    log_error(f"Gagal total Halaman {page} Toko {shop_id}: {e}")
+                    log_error(f"Gagal total Halaman {page} Toko {shop_id}: {e}", context=log_ctx)
                     return None # Gagalkan satu toko ini (All or Nothing)
                 time.sleep(random.uniform(0.1, 0.3))
         
@@ -241,10 +242,13 @@ def start_scraping_process():
     file_indices = [int(re.search(r'-(\d+)\.csv', f).group(1)) for f in all_split_files]
     period = input("Scraping untuk periode ke berapa? (1, 2, dst): ")
     file_num = input(f"Mau scraping file ke berapa? ({min(file_indices)}-{max(file_indices)}): ")
+    ctx = f"P{period} F{file_num}"
     
     input_file = os.path.join(SPLIT_FOLDER, f"SPLIT_SHOP-{file_num}.csv")
     shop_csv_path = f"SHOP_P{period}/SHOP_P{period}-{file_num}.csv"
     prod_csv_path = f"PRODUCT_P{period}/PRODUCT_P{period}-{file_num}.csv"
+    
+    print(f"\n>>> MENJALANKAN SCRAPING PERIODE: P{period} | FILE: SPLIT_SHOP-{file_num} <<<")
     
     os.makedirs(os.path.dirname(shop_csv_path), exist_ok=True)
     os.makedirs(os.path.dirname(prod_csv_path), exist_ok=True)
@@ -276,14 +280,14 @@ def start_scraping_process():
         pbar.set_description(f"Scraping: {domain}")
         
         # 2. Ambil Shop Info (Hanya dilakukan untuk toko yang BELUM di-scrape)
-        shop_info = get_shop_detailed_info(domain)
+        shop_info = get_shop_detailed_info(domain, log_ctx=ctx)
         if not shop_info:
-            log_error(f"Gagal ambil info toko: {domain}")
+            log_error(f"Gagal ambil info toko: {domain}", context=ctx)
             pbar.update(1)
             continue
 
         # 3. PROSES SCRAPING (All or Nothing)
-        products = get_shop_products(shop_info['Shop_ID'], city, pbar)
+        products = get_shop_products(shop_info['Shop_ID'], city, pbar, log_ctx=ctx)
         
         # 4. ATOMIC WRITE: Hanya tulis jika data produk tuntas
         if products is not None:
@@ -304,7 +308,7 @@ def start_scraping_process():
             
             scraped_domains.add(domain.lower())
         else:
-            log_error(f"Toko {domain} di-skip sementara karena gangguan koneksi.")
+            log_error(f"Toko {domain} di-skip sementara karena gangguan koneksi.", context=ctx)
 
         pbar.update(1)
         time.sleep(random.uniform(0.1, 0.3))

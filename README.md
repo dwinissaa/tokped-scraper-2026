@@ -16,9 +16,27 @@ Kumpulan skrip otomasi Python untuk ekstraksi data toko dan produk Tokopedia sec
 
 ---
 
+## 🌐 [PENTING!!] Solusi Error Timeout (DNS Fix)
+Jika muncul error `Resolving timed out`, sesuaikan DNS menjadi **Manual IPv4** agar koneksi lebih stabil:
+
+* **Settings** > **Network & Internet** > **Wi-Fi** > **Hardware properties**
+* **DNS server assignment**: Klik **Edit** > Pilih **Manual**
+* **IPv4**: **ON**
+  1. **Preferred DNS**: `1.1.1.1`
+  2. **Alternate DNS**: `8.8.8.8`
+* **Save** dan jalankan ulang skrip.
+
+---
+
 ## 📂 Struktur & Alur Kerja
 
 Skrip dibagi menjadi 3 tahap utama untuk memastikan kestabilan proses:
+
+### 0. Install Packages
+Jalankan perintah ini
+```bash
+pip install -r requirements.txt
+```
 
 ### 1. Persiapan Master Data
 **File:** `0. Scraping Master Tokped.ipynb`
